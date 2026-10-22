@@ -1,0 +1,30 @@
+# Środowisko i cache
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Dane
+data/
+datasets/
+*.zip
+*.tar
+*.tar.gz
+*.h5
+*.hdf5
+
+# Wagi i checkpointy
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+checkpoints/
+runs/
+wandb/
+logs/
+
+# Wyniki inferencji / ewaluacji
+outputs/
+predictions/
+
