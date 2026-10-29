@@ -6,9 +6,7 @@ venv/
 
 # Dane
 data/
-dataset/*
-!dataset/splits/
-!dataset/splits/**
+dataset/
 datasets/
 *.zip
 *.tar
