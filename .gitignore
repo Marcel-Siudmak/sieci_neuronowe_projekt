@@ -6,6 +6,7 @@ venv/
 
 # Dane
 data/
+dataset/
 datasets/
 *.zip
 *.tar
