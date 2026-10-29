@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-Skrypt przygotowujący dane do treningu sieci neuronowej (NYU Depth V2).
-1. Weryfikuje integralność par obrazów (RGB + mapa głębi) oraz brak uszkodzonych/pustych plików.
-2. Sprawdza i raportuje obecność powtórzeń (duplikatów) na poziomie haszy SHA-256 oraz wykrywa przecieki między zbiorami.
-3. Dzieli zbiór na train, validation oraz test z uwzględnieniem scen (scene-aware split, brak data leakage) lub wg istniejącego zbioru testowego.
-4. Zapisuje gotowe pliki CSV (train.csv, val.csv, test.csv) oraz szczegółowy raport JSON.
+Skrypt przygotowujący i zarządzający datasetem do treningu sieci neuronowej (NYU Depth V2).
+1. Uporządkowanie i zarządzanie strukturą katalogu datasetu (likwidacja zbędnych zagnieżdżeń,
+   usuwanie artefaktów pobierania, auto-organizacja).
+2. Opcjonalne pobieranie z Kaggle za pomocą kagglehub i bezpośrednie rozpakowanie do czystej struktury.
+3. Weryfikacja integralności par obrazów (RGB + mapa głębi) oraz brak uszkodzonych/pustych plików.
+4. Wyszukiwanie powtórzeń (duplikatów) na poziomie haszy SHA-256 oraz wykrywanie przecieków między zbiorami.
+5. Podział zbioru na train, validation oraz test z uwzględnieniem scen (scene-aware split, brak data leakage)
+   lub wg oficjalnego zbioru testowego.
+6. Zapis gotowych plików CSV (train.csv, val.csv, test.csv) z elastycznym formatem ścieżek
+   (względem repozytorium lub względem datasetu) oraz szczegółowego raportu JSON.
 """
 
 import argparse
@@ -13,6 +18,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -28,16 +34,124 @@ def compute_file_hash(filepath: Path, chunk_size: int = 65536) -> str:
     return hasher.hexdigest()
 
 
+def organize_dataset_directory(dataset_dir: Path) -> bool:
+    """
+    Porządkuje strukturę w katalogu dataset:
+    - Usuwa niepotrzebne zagnieżdżenie dataset/data/ przenosząc foldery wyżej.
+    - Przenosi surowe pliki *.csv z Kaggle do dataset/raw_csv/.
+    - Usuwa katalogi śmieciowe, np. .complete z kagglehub.
+    Zwraca True, jeśli dokonano reorganizacji.
+    """
+    reorganized = False
+    nested_data_dir = dataset_dir / "data"
+    complete_cache_dir = dataset_dir / ".complete"
+
+    # 1. Czyszczenie ukrytych artefaktów cache kagglehub (.complete)
+    if complete_cache_dir.exists():
+        print(f"  [Auto-Organize] Usuwanie pozostałości po pobieraniu: {complete_cache_dir.name}")
+        shutil.rmtree(complete_cache_dir, ignore_errors=True)
+        reorganized = True
+
+    # 2. Likwidacja zagnieżdżenia dataset/data/
+    if nested_data_dir.is_dir():
+        print(f"  [Auto-Organize] Wykryto zagnieżdżony katalog '{nested_data_dir}'. Spłaszczanie struktury...")
+        raw_csv_dir = dataset_dir / "raw_csv"
+
+        for item in list(nested_data_dir.iterdir()):
+            target = dataset_dir / item.name
+            if item.is_dir():
+                if not target.exists():
+                    shutil.move(str(item), str(target))
+                    print(f"   -> Przeniesiono folder: {item.name} -> {target}")
+                    reorganized = True
+                else:
+                    print(f"   -> Ostrzeżenie: Docelowy folder {target} już istnieje, pomijam {item.name}")
+            elif item.is_file():
+                if item.suffix.lower() == ".csv":
+                    raw_csv_dir.mkdir(parents=True, exist_ok=True)
+                    csv_target = raw_csv_dir / item.name
+                    shutil.move(str(item), str(csv_target))
+                    print(f"   -> Przeniesiono archiwalny CSV: {item.name} -> {csv_target}")
+                    reorganized = True
+                else:
+                    if not target.exists():
+                        shutil.move(str(item), str(target))
+                        reorganized = True
+
+        try:
+            nested_data_dir.rmdir()
+            print("  [Auto-Organize] Usunięto pusty katalog zagnieżdżony 'data/'.")
+            reorganized = True
+        except OSError:
+            print("  [Auto-Organize] Katalog 'data/' nie jest pusty, pozostawiono.")
+
+    return reorganized
+
+
+def download_dataset(dataset_dir: Path) -> None:
+    """
+    Pobiera dataset z Kaggle (sohaibanwaar1203/image-depth-estimation) za pomocą kagglehub
+    i automatycznie organizuje strukturę w dataset_dir.
+    """
+    try:
+        import kagglehub
+    except ImportError:
+        print("BŁĄD: Do pobrania zbioru wymagana jest biblioteka 'kagglehub'.")
+        print("Zainstaluj ją komendą: uv add kagglehub")
+        sys.exit(1)
+
+    print(f"Pobieranie datasetu NYU Depth V2 z Kaggle do {dataset_dir}...")
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    downloaded_path = Path(kagglehub.dataset_download("sohaibanwaar1203/image-depth-estimation"))
+    print(f"Pobrano do lokalnej pamięci podręcznej: {downloaded_path}")
+
+    # Jeśli pobrano do innego katalogu niż dataset_dir, przenosimy/kopiujemy zawartość
+    if downloaded_path.resolve() != dataset_dir.resolve():
+        print(f"Przenoszenie danych do {dataset_dir}...")
+        for item in downloaded_path.iterdir():
+            target = dataset_dir / item.name
+            if not target.exists():
+                shutil.move(str(item), str(target))
+
+    organize_dataset_directory(dataset_dir)
+    print("Pobieranie i organizacja zakończone pomyślnie.")
+
+
+def resolve_dataset_dirs(dataset_dir: Path, auto_organize: bool = True) -> Tuple[Path, Path]:
+    """
+    Lokalizuje katalogi nyu2_train oraz nyu2_test.
+    Jeśli wykryje zagnieżdżenie data/, przeprowadza auto-organizację lub fallback.
+    """
+    train_dir = dataset_dir / "nyu2_train"
+    test_dir = dataset_dir / "nyu2_test"
+
+    if train_dir.exists():
+        if auto_organize:
+            organize_dataset_directory(dataset_dir)
+        return train_dir, test_dir
+
+    nested_train = dataset_dir / "data" / "nyu2_train"
+    nested_test = dataset_dir / "data" / "nyu2_test"
+
+    if nested_train.exists():
+        if auto_organize:
+            print("Wykryto zagnieżdżenie w 'data/'. Uruchamianie procedury auto-organizacji...")
+            organize_dataset_directory(dataset_dir)
+            return train_dir, test_dir
+        return nested_train, nested_test
+
+    return train_dir, test_dir
+
+
 def load_dataset_pairs(
-    dataset_dir: Path,
+    train_dir: Path,
+    test_dir: Path,
 ) -> Tuple[List[Tuple[Path, Path, str]], List[Tuple[Path, Path, str]]]:
     """
     Wczytuje pary (rgb, depth, scene) dla zbioru treningowego i testowego.
     Zwraca (train_pairs, test_pairs).
     """
-    train_dir = dataset_dir / "nyu2_train"
-    test_dir = dataset_dir / "nyu2_test"
-
     train_pairs: List[Tuple[Path, Path, str]] = []
     test_pairs: List[Tuple[Path, Path, str]] = []
 
@@ -111,7 +225,6 @@ def find_duplicates(
       - rgb_hashes: {path: hash_or_unique_id}
       - depth_hashes: {path: hash_or_unique_id}
     """
-    # Krok 1: grupowanie po rozmiarze pliku
     rgb_by_size = defaultdict(list)
     depth_by_size = defaultdict(list)
 
@@ -119,7 +232,6 @@ def find_duplicates(
         rgb_by_size[cached_sizes[rgb_p]].append(rgb_p)
         depth_by_size[cached_sizes[depth_p]].append(depth_p)
 
-    # Krok 2: obliczanie hashy dla potencjalnych kolizji rozmiarowych
     rgb_hashes: Dict[Path, str] = {}
     for size, paths in rgb_by_size.items():
         if len(paths) > 1:
@@ -136,7 +248,6 @@ def find_duplicates(
         else:
             depth_hashes[paths[0]] = f"unique_{size}_{paths[0].name}"
 
-    # Krok 3: wykrywanie powtórzeń
     rgb_hash_groups = defaultdict(list)
     for p, h in rgb_hashes.items():
         if not h.startswith("unique_"):
@@ -167,7 +278,7 @@ def deduplicate_pairs(
 ) -> Tuple[List[Tuple[Path, Path, str]], List[Tuple[Path, Path, str]]]:
     """
     Usuwa zduplikowane próbki:
-    - 'rgb': zachowuje pierwszą klatkę dla unikalnego obrazu RGB (odrzuca identyczne klatki wideo)
+    - 'rgb': zachowuje pierwszą klatkę dla unikalnego obrazu RGB
     - 'pair': zachowuje pierwszą klatkę dla identycznej pary (RGB + Depth)
     Zwraca (unique_pairs, removed_pairs).
     """
@@ -228,14 +339,13 @@ def split_by_scenes(
     scenes = list(scene_to_pairs.keys())
     rng.shuffle(scenes)
 
-    # Sortowanie scen malejąco po liczbie próbek dla dokładnego rozkładu (greedy)
+    # Sortowanie scen malejąco po liczbie próbek dla optymalnego dopasowania (greedy bin packing)
     sorted_scenes = sorted(scenes, key=lambda s: len(scene_to_pairs[s]), reverse=True)
 
     for scene in sorted_scenes:
         items = scene_to_pairs[scene]
         count = len(items)
 
-        # Wybór koszyka, który najbardziej odstaje poniżej celu
         deficits = [targets[i] - bin_counts[i] for i in range(3)]
         best_bin = deficits.index(max(deficits))
 
@@ -259,7 +369,7 @@ def split_random(
 ) -> Tuple[List[Tuple[Path, Path, str]], List[Tuple[Path, Path, str]], List[Tuple[Path, Path, str]]]:
     """
     Standardowy losowy podział próbek (ramka po ramce).
-    Uwaga: może powodować przeciek scen (scene leakage).
+    Uwaga: może powodować wyciek klatek z tych samych scen (scene leakage).
     """
     rng = random.Random(seed)
     shuffled = list(pairs)
@@ -281,29 +391,40 @@ def split_random(
     return train_data, val_data, test_data
 
 
+def format_path(path: Path, path_mode: str, project_root: Path, dataset_dir: Path) -> str:
+    """Formatuje ścieżkę pliku wg wybranego trybu: 'repo', 'dataset' lub 'abs'."""
+    if path_mode == "repo":
+        try:
+            return str(path.relative_to(project_root))
+        except ValueError:
+            return str(path)
+    elif path_mode == "dataset":
+        try:
+            return str(path.relative_to(dataset_dir))
+        except ValueError:
+            return str(path)
+    elif path_mode == "abs":
+        return str(path.resolve())
+    return str(path)
+
+
 def save_split_csv(
     filepath: Path,
     pairs: List[Tuple[Path, Path, str]],
-    relative_to: Optional[Path] = None,
+    path_mode: str,
+    project_root: Path,
+    dataset_dir: Path,
     add_header: bool = False,
 ) -> None:
-    """Zapisuje zbiór do pliku CSV."""
+    """Zapisuje zbiór do pliku CSV z uwzględnieniem wybranego formatu ścieżek."""
     filepath.parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if add_header:
             writer.writerow(["image", "depth", "scene"])
         for rgb_p, depth_p, scene in pairs:
-            if relative_to:
-                try:
-                    rgb_str = str(rgb_p.relative_to(relative_to))
-                    depth_str = str(depth_p.relative_to(relative_to))
-                except ValueError:
-                    rgb_str = str(rgb_p)
-                    depth_str = str(depth_p)
-            else:
-                rgb_str = str(rgb_p)
-                depth_str = str(depth_p)
+            rgb_str = format_path(rgb_p, path_mode, project_root, dataset_dir)
+            depth_str = format_path(depth_p, path_mode, project_root, dataset_dir)
 
             if add_header:
                 writer.writerow([rgb_str, depth_str, scene])
@@ -313,7 +434,7 @@ def save_split_csv(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Przygotowanie, deduplikacja i podział datasetu NYU Depth V2 na zbiory train/val/test."
+        description="Przygotowanie, organizacja, deduplikacja i podział datasetu NYU Depth V2 na zbiory train/val/test."
     )
     parser.add_argument(
         "--dataset-dir",
@@ -326,6 +447,33 @@ def main():
         type=Path,
         default=Path("dataset/splits"),
         help="Ścieżka do katalogu zapisu plików podziału CSV (domyślnie: dataset/splits)",
+    )
+    parser.add_argument(
+        "--download",
+        action="store_true",
+        default=False,
+        help="Pobierz dataset z Kaggle (sohaibanwaar1203/image-depth-estimation) przy użyciu kagglehub",
+    )
+    parser.add_argument(
+        "--organize",
+        action="store_true",
+        default=True,
+        help="Automatycznie uporządkuj strukturę katalogu (spłaszczenie data/, usunięcie .complete, archiwizacja surowych CSV)",
+    )
+    parser.add_argument(
+        "--no-organize",
+        action="store_false",
+        dest="organize",
+        help="Wyłącz automatyczne porządkowanie katalogu datasetu",
+    )
+    parser.add_argument(
+        "--path-mode",
+        choices=["repo", "dataset", "abs"],
+        default="repo",
+        help=(
+            "Format zapisu ścieżek w CSV: 'repo' (względne do korzenia repozytorium, np. dataset/nyu2_train/...), "
+            "'dataset' (względne do folderu dataset, np. nyu2_train/...), 'abs' (ścieżki bezwzględne)"
+        ),
     )
     parser.add_argument(
         "--test-source",
@@ -386,6 +534,12 @@ def main():
         default=False,
         help="Dodaj nagłówek 'image,depth' w plikach CSV (domyślnie: False)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Przeprowadź audyt i podział bez zapisywania plików CSV na dysku",
+    )
 
     args = parser.parse_args()
 
@@ -394,20 +548,31 @@ def main():
     output_dir = args.output_dir if args.output_dir.is_absolute() else project_root / args.output_dir
 
     print("=" * 70)
-    print(" Przygotowanie i audyt datasetu do sieci neuronowej")
-    print(f" Katalog datasetu: {dataset_dir}")
+    print(" Przygotowanie, organizacja i audyt datasetu NYU Depth V2")
+    print(f" Katalog datasetu:  {dataset_dir}")
     print(f" Katalog wyjściowy: {output_dir}")
-    print(f" Strategia podziału: {args.strategy.upper()} | Źródło testu: {args.test_source}")
+    print(f" Tryb ścieżek CSV:  {args.path_mode.upper()}")
+    print(f" Strategia:         {args.strategy.upper()} | Źródło testu: {args.test_source}")
     print("=" * 70)
 
-    # 1. Wczytanie danych
+    # 0. Opcjonalne pobieranie
+    if args.download:
+        download_dataset(dataset_dir)
+
+    # 1. Lokalizacja i opcjonalna auto-organizacja katalogów
+    train_dir, test_dir = resolve_dataset_dirs(dataset_dir, auto_organize=args.organize)
+
     print("\n[1/4] Wczytywanie i sprawdzanie integralności plików...")
-    train_pairs, test_pairs = load_dataset_pairs(dataset_dir)
+    print(f"  Ścieżka train: {train_dir}")
+    print(f"  Ścieżka test:  {test_dir}")
+
+    train_pairs, test_pairs = load_dataset_pairs(train_dir, test_dir)
     print(f"  Znaleziono par w nyu2_train: {len(train_pairs):,}")
     print(f"  Znaleziono par w nyu2_test:  {len(test_pairs):,}")
 
     if not train_pairs:
-        print("BŁĄD: Nie znaleziono danych treningowych w katalogu:", dataset_dir)
+        print(f"\nBŁĄD: Nie znaleziono danych treningowych w katalogu: {train_dir}")
+        print("Upewnij się, że zbiór został pobrany (możesz użyć flagi --download).")
         sys.exit(1)
 
     train_valid, train_errors, train_sizes = verify_file_integrity(train_pairs)
@@ -470,7 +635,6 @@ def main():
     scene_allocations = {}
 
     if args.test_source == "split":
-        # Dzielimy nyu2_train na train, val, test
         if args.strategy == "scene":
             train_set, val_set, test_set, scene_allocations = split_by_scenes(
                 train_processed, tuple(args.ratios), seed=args.seed
@@ -480,7 +644,6 @@ def main():
                 train_processed, tuple(args.ratios), seed=args.seed
             )
     else:
-        # Używamy nyu2_test jako test, a nyu2_train dzielimy na train i val
         test_set = test_valid
         val_r = args.val_ratio
         train_r = 1.0 - val_r
@@ -512,6 +675,10 @@ def main():
         print(f"    - Liczba scen w test:  {len(scene_allocations.get('test_scenes', []))}")
 
     # 4. Zapis wyników
+    if args.dry_run:
+        print("\n[Dry-run] Pominięto zapis plików na dysku.")
+        return
+
     print(f"\n[4/4] Zapisywanie plików CSV i raportu w '{output_dir}'...")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -520,13 +687,20 @@ def main():
     test_csv = output_dir / "test.csv"
     report_json = output_dir / "dataset_summary.json"
 
-    save_split_csv(train_csv, train_set, relative_to=project_root, add_header=args.add_header)
-    save_split_csv(val_csv, val_set, relative_to=project_root, add_header=args.add_header)
-    save_split_csv(test_csv, test_set, relative_to=project_root, add_header=args.add_header)
+    save_split_csv(
+        train_csv, train_set, path_mode=args.path_mode, project_root=project_root, dataset_dir=dataset_dir, add_header=args.add_header
+    )
+    save_split_csv(
+        val_csv, val_set, path_mode=args.path_mode, project_root=project_root, dataset_dir=dataset_dir, add_header=args.add_header
+    )
+    save_split_csv(
+        test_csv, test_set, path_mode=args.path_mode, project_root=project_root, dataset_dir=dataset_dir, add_header=args.add_header
+    )
 
     summary = {
         "dataset_dir": str(dataset_dir),
         "output_dir": str(output_dir),
+        "path_mode": args.path_mode,
         "strategy": args.strategy,
         "test_source": args.test_source,
         "seed": args.seed,
