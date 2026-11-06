@@ -29,3 +29,5 @@ logs/
 outputs/
 predictions/
 
+
+.DS_Store
