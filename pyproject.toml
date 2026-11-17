@@ -6,12 +6,17 @@ dependencies = [
     "kagglehub>=1.0.3",
     "numpy>=2.5.4",
     "torch>=2.15.0",
+    "torchvision>=0.29.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:.*The image decoding and encoding capabilities of TorchVision are deprecated.*:DeprecationWarning",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
 ]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
