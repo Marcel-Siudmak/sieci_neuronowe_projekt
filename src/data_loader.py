@@ -49,8 +49,10 @@ def get_dataloaders(
     num_workers: int = 0,
     pin_memory: bool = False,
     train_transform: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None,
+    eval_transform: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """Tworzy DataLoadery dla zbiorów treningowego, walidacyjnego i testowego."""
+    persistent_workers = num_workers > 0
     train_loader = DataLoader(
         DepthDataset(train_csv, transform=train_transform),
         batch_size=batch_size,
@@ -58,21 +60,24 @@ def get_dataloaders(
         drop_last=True,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
     )
     val_loader = DataLoader(
-        DepthDataset(val_csv),
+        DepthDataset(val_csv, transform=eval_transform),
         batch_size=batch_size,
         shuffle=False,
         drop_last=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
     )
     test_loader = DataLoader(
-        DepthDataset(test_csv),
+        DepthDataset(test_csv, transform=eval_transform),
         batch_size=batch_size,
         shuffle=False,
         drop_last=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
     )
     return train_loader, val_loader, test_loader
