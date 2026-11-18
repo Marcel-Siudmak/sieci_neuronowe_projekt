@@ -3,9 +3,23 @@ import math
 from pathlib import Path
 
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 from torchvision.io import write_png
 
-from scripts.train import parse_args, run_training
+from scripts.train import _maybe_subset_loader, parse_args, run_training
+
+
+def test_maybe_subset_loader_spreads_indices():
+    dataset = TensorDataset(torch.arange(100))
+    loader = DataLoader(dataset, batch_size=5, shuffle=False)
+
+    subset_loader = _maybe_subset_loader(loader, max_samples=10, shuffle=False, drop_last=False)
+    indices = subset_loader.dataset.indices
+
+    assert len(indices) == 10
+    assert indices[0] == 0
+    assert indices[-1] == 99
+    assert indices != list(range(10))
 
 
 def test_training_smoke_run(tmp_path: Path):

@@ -49,11 +49,12 @@ def _maybe_subset_loader(
     shuffle: bool,
     drop_last: bool,
 ) -> DataLoader:
-    """Ogranicza DataLoader do pierwszych `max_samples` próbek (do szybkich testów)."""
+    """Ogranicza DataLoader do równomiernie rozłożonych `max_samples` próbek (do szybkich testów)."""
     if max_samples is None or max_samples >= len(loader.dataset):
         return loader
 
-    subset = Subset(loader.dataset, range(max_samples))
+    indices = np.linspace(0, len(loader.dataset) - 1, max_samples, dtype=int).tolist()
+    subset = Subset(loader.dataset, indices)
     batch_size = loader.batch_size or 1
     return DataLoader(
         subset,

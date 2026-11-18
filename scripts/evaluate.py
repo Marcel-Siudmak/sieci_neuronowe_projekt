@@ -161,7 +161,8 @@ def run_evaluation(args: argparse.Namespace) -> dict:
 
     test_ds: Dataset = DepthDataset(args.test_csv, transform=EvalTransform(size=img_size))
     if args.max_samples is not None and args.max_samples < len(test_ds):
-        test_ds = Subset(test_ds, range(args.max_samples))
+        indices = np.linspace(0, len(test_ds) - 1, args.max_samples, dtype=int).tolist()
+        test_ds = Subset(test_ds, indices)
 
     test_loader = DataLoader(
         test_ds,
