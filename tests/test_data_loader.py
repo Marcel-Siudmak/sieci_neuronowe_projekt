@@ -145,6 +145,33 @@ def test_get_dataloaders(mock_dataset_dir):
     assert batch_depth.dtype == torch.float32
 
 
+def test_get_dataloaders_eval_transform(mock_dataset_dir):
+    """Testuje oddzielne stosowanie train_transform i eval_transform."""
+    def mark_train(img: torch.Tensor, depth: torch.Tensor):
+        return img * 0.0 + 0.25, depth
+
+    def mark_eval(img: torch.Tensor, depth: torch.Tensor):
+        return img * 0.0 + 0.75, depth
+
+    csv_file = mock_dataset_dir["csv_no_header"]
+    train_loader, val_loader, test_loader = get_dataloaders(
+        train_csv=csv_file,
+        val_csv=csv_file,
+        test_csv=csv_file,
+        batch_size=2,
+        train_transform=mark_train,
+        eval_transform=mark_eval,
+    )
+
+    train_img, _ = next(iter(train_loader))
+    val_img, _ = next(iter(val_loader))
+    test_img, _ = next(iter(test_loader))
+
+    assert torch.allclose(train_img, torch.full_like(train_img, 0.25))
+    assert torch.allclose(val_img, torch.full_like(val_img, 0.75))
+    assert torch.allclose(test_img, torch.full_like(test_img, 0.75))
+
+
 def test_real_dataset_if_present():
     """Weryfikuje działanie na rzeczywistych danych projektu."""
     train_csv = Path("dataset/splits/train.csv")

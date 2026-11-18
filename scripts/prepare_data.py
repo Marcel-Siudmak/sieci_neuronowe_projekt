@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import sys
 from collections import defaultdict
@@ -303,6 +304,11 @@ def deduplicate_pairs(
     return unique_pairs, removed_pairs
 
 
+def get_base_scene_name(scene_name: str) -> str:
+    """Zwraca bazową nazwę pomieszczenia, usuwając sufiksy ujęć (np. 'kitchen_0019a_out' -> 'kitchen_0019')."""
+    return re.sub(r"(?<=\d)[a-z]?_out$", "", scene_name)
+
+
 def split_by_scenes(
     pairs: List[Tuple[Path, Path, str]],
     ratios: Tuple[float, float, float],
@@ -321,7 +327,8 @@ def split_by_scenes(
     """
     scene_to_pairs = defaultdict(list)
     for rgb_p, depth_p, scene in pairs:
-        scene_to_pairs[scene].append((rgb_p, depth_p, scene))
+        base_scene = get_base_scene_name(scene)
+        scene_to_pairs[base_scene].append((rgb_p, depth_p, scene))
 
     total_samples = len(pairs)
     train_ratio, val_ratio, test_ratio = ratios

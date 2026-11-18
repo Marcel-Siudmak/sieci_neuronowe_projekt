@@ -1,5 +1,5 @@
 import torch
-from loss import DepthLoss
+from src.loss import DepthLoss
 
 def test_depth_loss_zero_on_identical_inputs():
     criterion = DepthLoss(lambda_grad=0.5)
